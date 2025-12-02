@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export function ensureDb(vaultDir: string) {
+// We intentionally return `any` to avoid TS4058 ("type cannot be named")
+// caused by better-sqlite3's exported types across ESM builds.
+export function ensureDb(vaultDir: string): any {
   const dbPath = path.join(vaultDir, 'vault.db');
   if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
   const db = new Database(dbPath);

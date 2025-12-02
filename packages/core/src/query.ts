@@ -1,10 +1,9 @@
-import Database from 'better-sqlite3';
-
+// We avoid importing better-sqlite3 types to keep TS simple across ESM builds.
 export interface QueryParams {
   text?: string;
 }
 
-export function simpleQuery(db: Database, q: QueryParams) {
+export function simpleQuery(db: any, q: QueryParams) {
   if (!q.text) {
     return db.prepare('SELECT * FROM asset LIMIT 200').all();
   }
