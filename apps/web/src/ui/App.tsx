@@ -57,14 +57,14 @@ export default function App() {
       try {
         await fetchAssets();
       } catch {
-        /* ignore; empty gallery will show */
+        /* empty gallery OK */
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // Upload with real progress (XHR for upload progress events)
+  // Upload with real progress
   async function uploadFiles(files: FileList) {
     setUploading(true);
     setUploadPct(0);
@@ -121,6 +121,8 @@ export default function App() {
   }
 
   const years = Array.from(new Set(assets.map(a => new Date(a.created_ts).getFullYear().toString()))).sort().reverse();
+  const totalSaved = assets.reduce((s,a)=> s + (a.saved_bytes||0), 0);
+  const totalVault = assets.reduce((s,a)=> s + (a.bytes_vault||0), 0);
 
   // Splash
   if (loading) {
@@ -149,7 +151,7 @@ export default function App() {
           </label>
           {!user ? (
             <button
-              onClick={() => setUser({ email: 'demo@googleuser.com' })} // mock sign-in
+              onClick={() => setUser({ email: 'demo@googleuser.com' })}
               style={{ padding:'8px 12px', borderRadius:8, background:'#22c55e', color:'#0b1020', border:'none', fontWeight:600 }}
               title="Mock Google Sign-In (no real OAuth here)"
             >
@@ -264,7 +266,10 @@ export default function App() {
         </section>
 
         <section style={{ background:'#0f172a', border:'1px solid #1f2a44', borderRadius:16, padding:16 }}>
-          <h3 style={{ marginTop:0 }}>Your Gallery</h3>
+          <h3 style={{ marginTop:0 }}>
+            Your Gallery
+            <span style={{ marginLeft:12, fontSize:13, opacity:0.8 }}>saved {bytes(totalSaved)} · vault {bytes(totalVault)}</span>
+          </h3>
           {assets.length === 0 ? (
             <p style={{ opacity:0.9 }}>No results yet. Upload files, click <b>Compress</b>, then refresh.</p>
           ) : (

@@ -28,15 +28,16 @@ const PORT = Number(process.env.PORT || 8787);
 const UPLOADS = path.resolve('.uploads');
 
 const app = Fastify({ logger: true });
+
 await app.register(fastifyCors, { origin: true });
 await app.register(fastifyMultipart, {
-  limits: {
-    fileSize: 1024 * 1024 * 1024, // 1GB per file
-    files: 200
-  }
+  limits: { fileSize: 1024 * 1024 * 1024, files: 200 } // 1GB / 200 files
 });
 await app.register(fastifyStatic, { root: path.join(VAULT), prefix: '/vault/', decorateReply: false });
-// Health endpoint (used by the web app splash to avoid hanging)
+
+// Friendly root (avoid 404 noise)
+app.get('/', async () => ({ ok: true, name: 'StoriLite API', vault: VAULT }));
+// Health check used by the web app splash
 app.get('/api/health', async () => ({ ok: true, vault: VAULT }));
 
 /** Helpers */
@@ -79,6 +80,24 @@ app.get('/api/file/:id', async (req, reply) => {
   return reply.send(fs.createReadStream(row.vault_path));
 });
 
+/** Optional: GET /api/backup/:id → original file stream if present */
+app.get('/api/backup/:id', async (req, reply) => {
+  const id = (req.params as any).id;
+  const dir = path.join(VAULT, 'backups', id);
+  if (!fs.existsSync(dir)) return reply.code(404).send();
+  const files = fs.readdirSync(dir);
+  if (!files.length) return reply.code(404).send();
+  const full = path.join(dir, files[0]);
+  const lower = full.toLowerCase();
+  const ctype =
+    lower.endsWith('.png') ? 'image/png' :
+    (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) ? 'image/jpeg' :
+    lower.endsWith('.heic') ? 'image/heic' :
+    'application/octet-stream';
+  reply.header('Content-Type', ctype);
+  return reply.send(fs.createReadStream(full));
+});
+
 /** POST /api/upload (multipart) → stores files into .uploads/ */
 app.post('/api/upload', async (req, reply) => {
   fs.mkdirSync(UPLOADS, { recursive: true });
@@ -86,6 +105,7 @@ app.post('/api/upload', async (req, reply) => {
   let count = 0;
   for await (const part of parts) {
     if (part.type === 'file' && part.filename) {
+      req.log.info({ filename: part.filename }, 'upload: received');
       const dest = path.join(UPLOADS, part.filename);
       await new Promise<void>((res, rej) => {
         const ws = fs.createWriteStream(dest);
@@ -96,6 +116,7 @@ app.post('/api/upload', async (req, reply) => {
       count++;
     }
   }
+  req.log.info({ uploaded: count }, 'upload: complete');
   return { ok: true, uploaded: count };
 });
 
@@ -108,7 +129,6 @@ app.post('/api/compress', async (req, reply) => {
   const files = await fg(['**/*.*'], { cwd: UPLOADS, absolute: true, dot: false });
   req.log.info({ files: files.length }, 'compress: found files');
 
-
   let converted = 0;
   for (const file of files) {
     try {
@@ -118,8 +138,15 @@ app.post('/api/compress', async (req, reply) => {
       const createdTs = stat.mtimeMs;
 
       if (isImage(file)) {
+        // Quality: tweak as desired (lower is higher quality for AVIF in sharp)
         const qual = preset === 'max' ? 28 : preset === 'high' ? 45 : 35;
         const avif = await sharp(buf).avif({ quality: qual }).toBuffer();
+
+        // Skip tiny/pointless conversions (savings < 2%)
+        if (avif.length >= buf.length * 0.98) {
+          continue;
+        }
+
         const outDir = yymmDir(dirs.images, createdTs);
         const outPath = path.join(outDir, `${id}.avif`);
         fs.writeFileSync(outPath, avif);
@@ -129,31 +156,55 @@ app.post('/api/compress', async (req, reply) => {
 
         const ex = await extractExif(buf);
         db.prepare(
-          'INSERT OR REPLACE INTO asset (id, orig_path, vault_path, media_type, created_ts, bytes_orig, bytes_vault, quality_preset, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          `INSERT OR REPLACE INTO asset
+           (id, orig_path, vault_path, media_type, created_ts, bytes_orig, bytes_vault, quality_preset, state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(id, file, outPath, 'image', ex.createdTs ?? createdTs, buf.length, avif.length, preset, 'verified');
 
+        // index terms: year + filename + camera make/model (when present)
         const year = new Date(ex.createdTs ?? createdTs).getFullYear();
+        const base = path.basename(file).toLowerCase();
         db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(year));
+        db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, base);
+        if (ex?.make) db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.make).toLowerCase());
+        if (ex?.model) db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.model).toLowerCase());
+
         converted++;
       } else if (isVideo(file)) {
         const outDir = yymmDir(dirs.videos, createdTs);
         const outPath = path.join(outDir, `${id}.mp4`);
         await new Promise<void>((resolve, reject) => {
-          ffmpeg(file).videoCodec('libx264').outputOptions(['-crf 23','-preset veryfast']).audioCodec('aac')
-            .output(outPath).on('end', () => resolve()).on('error', reject).run();
+          ffmpeg(file)
+            .videoCodec('libx264')
+            .outputOptions(['-crf 23','-preset veryfast'])
+            .audioCodec('aac')
+            .output(outPath)
+            .on('end', () => resolve())
+            .on('error', reject)
+            .run();
         });
         const av = fs.statSync(outPath);
         db.prepare(
-          'INSERT OR REPLACE INTO asset (id, orig_path, vault_path, media_type, created_ts, bytes_orig, bytes_vault, quality_preset, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          `INSERT OR REPLACE INTO asset
+           (id, orig_path, vault_path, media_type, created_ts, bytes_orig, bytes_vault, quality_preset, state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(id, file, outPath, 'video', createdTs, fs.statSync(file).size, av.size, preset, 'verified');
 
+        const base = path.basename(file).toLowerCase();
         db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(new Date(createdTs).getFullYear()));
+        db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, base);
         converted++;
       }
     } catch (e) {
       req.log.error(e);
     }
   }
+
+  // cleanup staged files so repeat compress doesn't reprocess the same ones
+  try {
+    for (const f of files) fs.rmSync(f, { force: true });
+  } catch {}
+
   return { ok: true, converted };
 });
 
