@@ -20,11 +20,11 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
 
-      # Install pnpm (uses the official action)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.24.0
+          standalone: true     # <-- ensures a pnpm binary is installed on PATH
           run_install: false
 
       - name: Print versions
@@ -32,24 +32,17 @@ jobs:
           node -v
           pnpm -v
 
-      # Install dependencies (monorepo)
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Type-check / build everything (root script already calls -r build)
       - name: Build
         run: pnpm build
 
-      # Quick sanity: ensure api compiles and can start with a tmp vault
       - name: API smoke test
         run: |
           pnpm -F @photovault/core build
           mkdir -p .vault && node -e "console.log('vault ok')"
-          # Type-only sanity; we don't run the server in CI long-lived
           test -f apps/api/src/server.ts
+
       - name: Install ffmpeg (if needed for tests)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      # Optional: run unit tests when you add them
-      # - name: Test
-      #   run: pnpm test
