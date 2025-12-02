@@ -36,7 +36,7 @@ export default function App() {
 
   async function fetchAssets(text?: string) {
     const qs = text ? `?text=${encodeURIComponent(text)}` : '';
-    const res = await fetch(`http://localhost:8787/api/assets${qs}`);
+    const res = await fetch(`/api/assets${qs}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     setAssets(data);
@@ -48,7 +48,7 @@ export default function App() {
       try {
         const ctl = new AbortController();
         const t = setTimeout(() => ctl.abort(), 4000);
-        const h = await fetch('http://localhost:8787/api/health', { signal: ctl.signal });
+        const h = await fetch('/api/health', { signal: ctl.signal });
         clearTimeout(t);
         if (h.ok) setApiUp(true);
       } catch {
@@ -72,7 +72,7 @@ export default function App() {
       const fd = new FormData();
       Array.from(files).forEach(f => fd.append('file', f, f.name));
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', 'http://localhost:8787/api/upload', true);
+      xhr.open('POST', '/api/upload', true);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
       };
@@ -101,7 +101,7 @@ export default function App() {
   async function onCompress(preset: 'standard'|'high'|'max' = 'standard') {
     setCompressing(true);
     try {
-      const res = await fetch('http://localhost:8787/api/compress', {
+      const res = await fetch('/api/compress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preset })
@@ -271,7 +271,7 @@ export default function App() {
             <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap:8 }}>
               {assets.map(a => (
                 <figure key={a.id} style={{ aspectRatio:'1/1', background:'#111827', borderRadius:10, overflow:'hidden', margin:0, position:'relative' }}>
-                  <img src={`http://localhost:8787/api/thumb/${a.id}`} alt={a.id} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                  <img src={`/api/thumb/${a.id}`} alt={a.id} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
                   <figcaption style={{ position:'absolute', bottom:6, left:6, right:6, display:'flex', justifyContent:'space-between', fontSize:12, background:'rgba(0,0,0,0.4)', padding:'2px 6px', borderRadius:6 }}>
                     <span>{a.media_type} · {new Date(a.created_ts).toLocaleDateString()}</span>
                     <span>saved {bytes(a.saved_bytes)}</span>

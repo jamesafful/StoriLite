@@ -6,3 +6,4 @@ dist
 coverage
 apps/web/node_modules
 packages/*/node_modules
+*.png
