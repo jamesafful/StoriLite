@@ -1,0 +1,8 @@
+.DS_Store
+node_modules
+dist
+.vault
+*.log
+coverage
+apps/web/node_modules
+packages/*/node_modules
