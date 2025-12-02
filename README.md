@@ -1,12 +1,12 @@
 # StoriLite
 
-This is a **starter implementation** of the PhotoVault AI concept optimized for **GitHub Codespaces**.
+This is a **starter implementation** of the ai photo and video compression concept. 
 It includes:
 - **packages/core** — Vault, SQLite schema, EXIF indexing utilities (TypeScript)
 - **packages/cli** — CLI to scan/compress a folder of photos/videos into an app-managed vault
 - **apps/web** — React + Vite UI placeholder to browse results (demo-only)
 
-> ⚠️ This is a *developer starter*, not a production mobile app. It aims to validate core flows in Codespaces.
+> Currently, it aims to validate core flows in Codespaces.
 > Image compression uses **sharp** (AVIF/WebP) and video transcode uses **ffmpeg-static** + **fluent-ffmpeg** if available on the platform.
 
 ## Quickstart (Codespaces)
@@ -41,4 +41,4 @@ It includes:
 - No media leaves your machine in this starter. Replace with production-grade encryption before shipping.
 
 ## License
-MIT (starter only).
+No License. All rights reserved.
