@@ -1,3 +1,4 @@
+# .github/workflows/build-test.yml
 name: build-test
 
 on:
@@ -9,20 +10,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1) Install pnpm FIRST so the next step can cache it
+      # Install pnpm FIRST, matching package.json's packageManager (pnpm@9.0.0)
       - name: Setup pnpm (standalone)
         uses: pnpm/action-setup@v4
         with:
-          version: 10.24.0
-          standalone: true     # <-- puts a pnpm binary on PATH
+          version: 9.0.0
+          standalone: true
           run_install: false
 
-      # 2) Now setup-node can safely use cache: 'pnpm'
+      # Node after pnpm; we can use the built-in pnpm cache safely now
       - name: Setup Node (v20) + pnpm cache
         uses: actions/setup-node@v4
         with:
@@ -34,18 +34,14 @@ jobs:
           node -v
           pnpm -v
 
-      - name: Install dependencies
+      - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build all
+      - name: Build
         run: pnpm build
 
-      - name: API smoke (no long-running server)
+      - name: API smoke test
         run: |
           pnpm -F @photovault/core build
           mkdir -p .vault && node -e "console.log('vault ok')"
           test -f apps/api/src/server.ts
-
-      # Only needed if you later add tests that actually transcode video
-      - name: Install ffmpeg (optional for tests)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
