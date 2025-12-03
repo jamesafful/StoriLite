@@ -14,35 +14,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (LTS / v20)
+      # 1) Install pnpm FIRST so the next step can cache it
+      - name: Setup pnpm (standalone)
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+          standalone: true     # <-- puts a pnpm binary on PATH
+          run_install: false
+
+      # 2) Now setup-node can safely use cache: 'pnpm'
+      - name: Setup Node (v20) + pnpm cache
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.24.0
-          standalone: true     # <-- ensures a pnpm binary is installed on PATH
-          run_install: false
 
       - name: Print versions
         run: |
           node -v
           pnpm -v
 
-      - name: Install deps
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
+      - name: Build all
         run: pnpm build
 
-      - name: API smoke test
+      - name: API smoke (no long-running server)
         run: |
           pnpm -F @photovault/core build
           mkdir -p .vault && node -e "console.log('vault ok')"
           test -f apps/api/src/server.ts
 
-      - name: Install ffmpeg (if needed for tests)
+      # Only needed if you later add tests that actually transcode video
+      - name: Install ffmpeg (optional for tests)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
