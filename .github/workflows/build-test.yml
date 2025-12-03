@@ -1,0 +1,68 @@
+name: build-test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) Install pnpm as a standalone binary (adds it to PATH)
+      - name: Setup pnpm (standalone)
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+          standalone: true
+          run_install: false
+
+      # 2) Install Node (no pnpm cache here to avoid the lookup issue)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3) Configure pnpm store location
+      - name: Configure pnpm store path
+        run: pnpm config set store-dir ~/.pnpm-store
+
+      # 4) Cache the pnpm store ourselves (reliable)
+      - name: pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: ${{ runner.os }}-pnpmstore-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpmstore-
+
+      - name: Print versions
+        run: |
+          which pnpm
+          pnpm -v
+          node -v
+
+      # 5) Install deps (monorepo)
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # 6) Build all workspaces
+      - name: Build
+        run: pnpm build
+
+      # 7) API smoke (no long-running server in CI)
+      - name: API smoke test
+        run: |
+          pnpm -F @photovault/core build
+          mkdir -p .vault && node -e "console.log('vault ok')"
+          test -f apps/api/src/server.ts
+
+      # 8) (Optional) ffmpeg if you later add video tests
+      - name: Install ffmpeg (optional for tests)
+        if: ${{ false }} # flip to true when needed
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
