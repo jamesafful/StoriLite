@@ -2,8 +2,6 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
-// NOTE: We keep the plugin for parity, but CodeQL won’t “see” it.
-// The explicit preHandler limiter below is what satisfies CodeQL.
 import rateLimit from '@fastify/rate-limit';
 
 import path from 'node:path';
@@ -77,17 +75,13 @@ function uniquePath(dest: string): string {
 }
 
 // ----------------------- Explicit per-route limiter -------------------------
-// Small, local, in-memory token bucket so CodeQL sees rate limiting on handlers.
-// We still keep @fastify/rate-limit (defense-in-depth), but THIS is what removes
-// the CodeQL “missing rate limiting” alerts.
 
 type Bucket = { tokens: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 
 function limiter(max: number, windowMs: number) {
-  return async (req: FastifyRequest, reply: FastifyReply) => {
-    // Key per IP + route path
-    const ip = (req.ip || req.socket?.remoteAddress || 'unknown').toString();
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const ip = (req.ip || (req as any).socket?.remoteAddress || 'unknown').toString();
     const route = (req.routerPath || (req as any).routeOptions?.url || req.url);
     const key = `${ip}|${route}|${max}|${windowMs}`;
 
@@ -106,7 +100,7 @@ function limiter(max: number, windowMs: number) {
         .header('x-ratelimit-reset', String(resetSecs))
         .code(429)
         .send({ error: 'too many requests' });
-      return reply; // stop handler
+      return; // IMPORTANT: finish without returning a value
     }
 
     b.tokens -= 1;
@@ -133,7 +127,6 @@ async function main() {
     prefix: '/vault/',
     decorateReply: false,
   });
-  // Keep plugin (optional with global: false); our preHandler limiter is authoritative.
   await app.register(rateLimit, { global: false });
 
   // ------------------------------ Routes ------------------------------------
@@ -156,7 +149,6 @@ async function main() {
     async () => ({ ok: true, vault: VAULT })
   );
 
-  // GET /api/assets?text=2025
   app.get(
     '/api/assets',
     {
@@ -180,16 +172,13 @@ async function main() {
   );
 
   // GET /api/thumb/:id
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/api/thumb/:id',
     {
       preHandler: [limiter(180, 60_000)],
       config: { rateLimit: { max: 180, timeWindow: 60_000 } },
     },
-    async (
-      req: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply
-    ) => {
+    async (req, reply) => {
       const id = String(req.params.id || '');
       if (!isValidId(id)) return reply.code(400).send({ error: 'invalid id' });
 
@@ -202,16 +191,13 @@ async function main() {
   );
 
   // GET /api/file/:id
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/api/file/:id',
     {
       preHandler: [limiter(120, 60_000)],
       config: { rateLimit: { max: 120, timeWindow: 60_000 } },
     },
-    async (
-      req: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply
-    ) => {
+    async (req, reply) => {
       const id = String(req.params.id || '');
       if (!isValidId(id)) return reply.code(400).send({ error: 'invalid id' });
 
@@ -230,16 +216,13 @@ async function main() {
   );
 
   // GET /api/backup/:id
-  app.get(
+  app.get<{ Params: { id: string } }>(
     '/api/backup/:id',
     {
       preHandler: [limiter(60, 60_000)],
       config: { rateLimit: { max: 60, timeWindow: 60_000 } },
     },
-    async (
-      req: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply
-    ) => {
+    async (req, reply) => {
       const id = String(req.params.id || '');
       if (!isValidId(id)) return reply.code(400).send({ error: 'invalid id' });
 
