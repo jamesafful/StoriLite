@@ -16,7 +16,7 @@ import { extractExif } from '@photovault/core/dist/exif.js';
 import { simpleQuery } from '@photovault/core/dist/query.js';
 import { makeThumb } from '@photovault/core/dist/thumbs.js';
 
-// Configure ffmpeg if the static path is available on this platform.
+// Configure ffmpeg if available
 if (ffmpegPath) {
   // @ts-ignore fluent-ffmpeg path setter accepts string | null
   ffmpeg.setFfmpegPath(ffmpegPath);
@@ -72,34 +72,58 @@ async function main() {
     prefix: '/vault/',
     decorateReply: false,
   });
-  // Enable rate limiter plugin (we'll use per-route limits via config.rateLimit)
+  // We’ll use per-route limits (CodeQL prefers explicit limits on each handler)
   await app.register(rateLimit, { global: false });
 
   // ------------------------------ Routes ------------------------------------
 
-  app.get('/', async () => ({ ok: true, name: 'StoriLite API', vault: VAULT }));
-  app.get('/api/health', async () => ({ ok: true, vault: VAULT }));
+  // GET /
+  app.get(
+    '/',
+    {
+      config: { rateLimit: { max: 120, timeWindow: 60_000 } }, // 120/min
+    },
+    async () => ({ ok: true, name: 'StoriLite API', vault: VAULT })
+  );
+
+  // GET /api/health
+  app.get(
+    '/api/health',
+    {
+      config: { rateLimit: { max: 300, timeWindow: 60_000 } }, // health can be higher
+    },
+    async () => ({ ok: true, vault: VAULT })
+  );
 
   /** GET /api/assets?text=2025 */
-  app.get('/api/assets', async (req) => {
-    const { text } = (req.query as { text?: string }) || {};
-    const db = ensureDb(VAULT);
-    const rows = simpleQuery(db, { text: text || undefined });
+  app.get(
+    '/api/assets',
+    {
+      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
+    },
+    async (req) => {
+      const { text } = (req.query as { text?: string }) || {};
+      const db = ensureDb(VAULT);
+      const rows = simpleQuery(db, { text: text || undefined });
 
-    return rows.map((r: any) => ({
-      id: r.id,
-      media_type: r.media_type,
-      created_ts: r.created_ts,
-      vault_path: r.vault_path,
-      bytes_orig: r.bytes_orig,
-      bytes_vault: r.bytes_vault,
-      saved_bytes: Math.max(0, (r.bytes_orig ?? 0) - (r.bytes_vault ?? 0)),
-    }));
-  });
+      return rows.map((r: any) => ({
+        id: r.id,
+        media_type: r.media_type,
+        created_ts: r.created_ts,
+        vault_path: r.vault_path,
+        bytes_orig: r.bytes_orig,
+        bytes_vault: r.bytes_vault,
+        saved_bytes: Math.max(0, (r.bytes_orig ?? 0) - (r.bytes_vault ?? 0)),
+      }));
+    }
+  );
 
   /** GET /api/thumb/:id → webp thumbnail */
   app.get(
     '/api/thumb/:id',
+    {
+      config: { rateLimit: { max: 180, timeWindow: 60_000 } }, // thumbs can be hit by gallery views
+    },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -118,6 +142,9 @@ async function main() {
   /** GET /api/file/:id → optimized AVIF/MP4 stream */
   app.get(
     '/api/file/:id',
+    {
+      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
+    },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -143,6 +170,9 @@ async function main() {
   /** Optional: GET /api/backup/:id → original file stream if present */
   app.get(
     '/api/backup/:id',
+    {
+      config: { rateLimit: { max: 60, timeWindow: 60_000 } }, // lower; original fetches are rarer
+    },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -178,7 +208,7 @@ async function main() {
     '/api/upload',
     {
       config: {
-        rateLimit: { max: 60, timeWindow: 60_000 }, // 60 per minute
+        rateLimit: { max: 60, timeWindow: 60_000 }, // 60/min
       },
     },
     async (req, reply) => {
@@ -219,7 +249,7 @@ async function main() {
     '/api/compress',
     {
       config: {
-        rateLimit: { max: 10, timeWindow: 60_000 }, // 10 per minute
+        rateLimit: { max: 10, timeWindow: 60_000 }, // 10/min
       },
     },
     async (req) => {
