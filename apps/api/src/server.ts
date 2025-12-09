@@ -16,13 +16,15 @@ import { extractExif } from '@photovault/core/dist/exif.js';
 import { simpleQuery } from '@photovault/core/dist/query.js';
 import { makeThumb } from '@photovault/core/dist/thumbs.js';
 
+// ------------------------------ Setup ---------------------------------------
+
 // Configure ffmpeg if available
 if (ffmpegPath) {
-  // @ts-ignore fluent-ffmpeg path setter accepts string | null
+  // @ts-ignore fluent-ffmpeg setter accepts string | null
   ffmpeg.setFfmpegPath(ffmpegPath);
 }
 
-// Resolve vault directory (prefer VAULT_DIR, fall back to repo root .vault if present)
+// Resolve vault directory (prefer VAULT_DIR, fall back to repo root .vault)
 let VAULT = process.env.VAULT_DIR || path.resolve('.vault');
 const rootVault = path.resolve(process.cwd(), '../../.vault');
 if (!fs.existsSync(VAULT) && fs.existsSync(rootVault)) {
@@ -57,6 +59,28 @@ function safeJoin(baseDir: string, targetPath: string): string {
   return resolved;
 }
 
+// Ensure any path we serve is inside VAULT (defense-in-depth, even if DB is wrong)
+function mustBeInsideVault(p: string): string | null {
+  const resolved = path.resolve(p);
+  const vaultRoot = path.resolve(VAULT) + path.sep;
+  return resolved.startsWith(vaultRoot) ? resolved : null;
+}
+
+// Generate a non-clobbering path for uploads if the filename already exists
+function uniquePath(dest: string): string {
+  if (!fs.existsSync(dest)) return dest;
+  const dir = path.dirname(dest);
+  const ext = path.extname(dest);
+  const name = path.basename(dest, ext);
+  let i = 1;
+  let cand = path.join(dir, `${name}(${i})${ext}`);
+  while (fs.existsSync(cand)) {
+    i++;
+    cand = path.join(dir, `${name}(${i})${ext}`);
+  }
+  return cand;
+}
+
 // ------------------------------- Server -------------------------------------
 
 async function main() {
@@ -72,7 +96,7 @@ async function main() {
     prefix: '/vault/',
     decorateReply: false,
   });
-  // We’ll use per-route limits (CodeQL prefers explicit limits on each handler)
+  // Use per-route limits (explicit for CodeQL)
   await app.register(rateLimit, { global: false });
 
   // ------------------------------ Routes ------------------------------------
@@ -80,27 +104,21 @@ async function main() {
   // GET /
   app.get(
     '/',
-    {
-      config: { rateLimit: { max: 120, timeWindow: 60_000 } }, // 120/min
-    },
+    { config: { rateLimit: { max: 120, timeWindow: 60_000 } } },
     async () => ({ ok: true, name: 'StoriLite API', vault: VAULT })
   );
 
   // GET /api/health
   app.get(
     '/api/health',
-    {
-      config: { rateLimit: { max: 300, timeWindow: 60_000 } }, // health can be higher
-    },
+    { config: { rateLimit: { max: 300, timeWindow: 60_000 } } },
     async () => ({ ok: true, vault: VAULT })
   );
 
   /** GET /api/assets?text=2025 */
   app.get(
     '/api/assets',
-    {
-      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
-    },
+    { config: { rateLimit: { max: 120, timeWindow: 60_000 } } },
     async (req) => {
       const { text } = (req.query as { text?: string }) || {};
       const db = ensureDb(VAULT);
@@ -121,9 +139,7 @@ async function main() {
   /** GET /api/thumb/:id → webp thumbnail */
   app.get(
     '/api/thumb/:id',
-    {
-      config: { rateLimit: { max: 180, timeWindow: 60_000 } }, // thumbs can be hit by gallery views
-    },
+    { config: { rateLimit: { max: 180, timeWindow: 60_000 } } },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -142,9 +158,7 @@ async function main() {
   /** GET /api/file/:id → optimized AVIF/MP4 stream */
   app.get(
     '/api/file/:id',
-    {
-      config: { rateLimit: { max: 120, timeWindow: 60_000 } },
-    },
+    { config: { rateLimit: { max: 120, timeWindow: 60_000 } } },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -157,22 +171,19 @@ async function main() {
         .prepare('SELECT vault_path, media_type FROM asset WHERE id=?')
         .get(id) as { vault_path: string; media_type: 'image' | 'video' } | undefined;
 
-      if (!row || !fs.existsSync(row.vault_path)) return reply.code(404).send();
+      if (!row) return reply.code(404).send();
+      const safe = mustBeInsideVault(row.vault_path);
+      if (!safe || !fs.existsSync(safe)) return reply.code(404).send();
 
-      reply.header(
-        'Content-Type',
-        row.media_type === 'image' ? 'image/avif' : 'video/mp4'
-      );
-      return reply.send(fs.createReadStream(row.vault_path));
+      reply.header('Content-Type', row.media_type === 'image' ? 'image/avif' : 'video/mp4');
+      return reply.send(fs.createReadStream(safe));
     }
   );
 
   /** Optional: GET /api/backup/:id → original file stream if present */
   app.get(
     '/api/backup/:id',
-    {
-      config: { rateLimit: { max: 60, timeWindow: 60_000 } }, // lower; original fetches are rarer
-    },
+    { config: { rateLimit: { max: 60, timeWindow: 60_000 } } },
     async (
       req: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply
@@ -190,13 +201,10 @@ async function main() {
       const full = safeJoin(dir, files[0]);
       const lower = full.toLowerCase();
       const ctype =
-        lower.endsWith('.png')
-          ? 'image/png'
-          : lower.endsWith('.jpg') || lower.endsWith('.jpeg')
-          ? 'image/jpeg'
-          : lower.endsWith('.heic')
-          ? 'image/heic'
-          : 'application/octet-stream';
+        lower.endsWith('.png') ? 'image/png'
+        : (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) ? 'image/jpeg'
+        : lower.endsWith('.heic') ? 'image/heic'
+        : 'application/octet-stream';
 
       reply.header('Content-Type', ctype);
       return reply.send(fs.createReadStream(full));
@@ -206,11 +214,7 @@ async function main() {
   /** POST /api/upload (multipart) → stores files into .uploads/ */
   app.post(
     '/api/upload',
-    {
-      config: {
-        rateLimit: { max: 60, timeWindow: 60_000 }, // 60/min
-      },
-    },
+    { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }, // 60/min
     async (req, reply) => {
       fs.mkdirSync(UPLOADS, { recursive: true });
 
@@ -221,12 +225,12 @@ async function main() {
         if (part.type === 'file' && part.filename) {
           // Sanitize filename to a safe basename; strip unsafe chars.
           const base = path.basename(part.filename).replace(/[^\w.\-]/g, '_');
-          const dest = safeJoin(UPLOADS, base);
+          const dest = uniquePath(safeJoin(UPLOADS, base));
 
-          req.log.info({ filename: base }, 'upload: received');
+          req.log.info({ filename: path.basename(dest) }, 'upload: received');
 
           await new Promise<void>((res, rej) => {
-            const ws = fs.createWriteStream(dest);
+            const ws = fs.createWriteStream(dest, { flags: 'wx' });
             part.file.pipe(ws);
             ws.on('finish', () => res());
             ws.on('error', rej);
@@ -247,11 +251,7 @@ async function main() {
    */
   app.post(
     '/api/compress',
-    {
-      config: {
-        rateLimit: { max: 10, timeWindow: 60_000 }, // 10/min
-      },
-    },
+    { config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, // 10/min
     async (req) => {
       const body = (req.body as any) || {};
       const preset: 'standard' | 'high' | 'max' = body.preset || 'standard';
@@ -291,7 +291,7 @@ async function main() {
             const thumb = await makeThumb(buf);
             fs.writeFileSync(path.join(dirs.thumbs, `${id}.webp`), thumb);
 
-            const ex: any = await extractExif(buf); // loosen typing to include make/model
+            const ex: any = await extractExif(buf); // include make/model if present
             db.prepare(
               `INSERT OR REPLACE INTO asset
                (id, orig_path, vault_path, media_type, created_ts, bytes_orig, bytes_vault, quality_preset, state)
@@ -313,10 +313,8 @@ async function main() {
             const base = path.basename(file).toLowerCase();
             db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(year));
             db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, base);
-            if (ex?.make)
-              db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.make).toLowerCase());
-            if (ex?.model)
-              db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.model).toLowerCase());
+            if (ex?.make)  db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.make).toLowerCase());
+            if (ex?.model) db.prepare('INSERT INTO index_terms (asset_id, term) VALUES (?, ?)').run(id, String(ex.model).toLowerCase());
 
             converted++;
           } else if (isVideo(file)) {
